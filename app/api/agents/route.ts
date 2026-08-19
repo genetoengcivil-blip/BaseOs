@@ -5,5 +5,6 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const db = getDb();
-  return NextResponse.json({ agents: db.agents.all() });
+  const agents = await db.agents.all();
+  return NextResponse.json({ agents });
 }

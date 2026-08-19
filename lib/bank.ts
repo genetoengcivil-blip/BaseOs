@@ -1,58 +1,54 @@
-import Database from 'better-sqlite3';
-import path from 'node:path';
-import type { BankSummary } from '@/lib/bank-statements';
+import { supabase } from '@/lib/supabase/client'
+import type { BankSummary } from '@/lib/bank-statements'
 
 /**
- * Bank statement-summary store — a SEPARATE better-sqlite3 file (data/bank.db,
- * gitignored PII), keyed by (account, month) so re-uploading a statement updates
- * in place. Holds per-business monthly income/outflow, not transactions.
+ * Bank statement-summary store using Supabase.
+ * Holds per-business monthly income/outflow, not transactions.
  */
 
-const DEFAULT_PATH = process.env.BANK_DB ?? path.join(process.cwd(), 'data', 'bank.db');
-
 export type BankStore = {
-  upsert(summary: BankSummary): void;
-  all(): BankSummary[];
-  close(): void;
+  upsert(summary: BankSummary): Promise<void>;
+  all(): Promise<BankSummary[]>;
+  close(): Promise<void>;
 };
 
-export function openBankStore(file: string = DEFAULT_PATH): BankStore {
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.exec(`CREATE TABLE IF NOT EXISTS bank_summaries (
-    account TEXT NOT NULL,
-    business TEXT NOT NULL,
-    month TEXT NOT NULL,
-    credits_cents INTEGER NOT NULL,
-    debits_cents INTEGER NOT NULL,
-    net_cents INTEGER NOT NULL,
-    PRIMARY KEY (account, month)
-  )`);
+export async function openBankStore(): Promise<BankStore> {
+  const upsert = async (summary: BankSummary) => {
+    const { error } = await supabase
+      .from('bank_summaries')
+      .upsert({
+        account: summary.account,
+        business: summary.business,
+        month: summary.month,
+        credits_cents: summary.creditsCents,
+        debits_cents: summary.debitsCents,
+        net_cents: summary.netCents,
+      }, {
+        onConflict: ['account', 'month']
+      })
+    if (error) throw error
+  }
 
-  const upsert = db.prepare(
-    `INSERT INTO bank_summaries (account, business, month, credits_cents, debits_cents, net_cents)
-     VALUES (@account, @business, @month, @creditsCents, @debitsCents, @netCents)
-     ON CONFLICT(account, month) DO UPDATE SET
-       business = excluded.business,
-       credits_cents = excluded.credits_cents,
-       debits_cents = excluded.debits_cents,
-       net_cents = excluded.net_cents`,
-  );
+  const all = async (): Promise<BankSummary[]> => {
+    const { data, error } = await supabase
+      .from('bank_summaries')
+      .select('*')
+      .order('month', { ascending: true })
+      .order('business', { ascending: true })
+    if (error) throw error
+    return data?.map(row => ({
+      account: row.account,
+      business: row.business,
+      month: row.month,
+      creditsCents: row.credits_cents,
+      debitsCents: row.debits_cents,
+      netCents: row.net_cents,
+    })) ?? []
+  }
 
-  return {
-    upsert(summary) {
-      upsert.run(summary);
-    },
-    all() {
-      return db
-        .prepare(
-          `SELECT account, business, month, credits_cents AS creditsCents, debits_cents AS debitsCents, net_cents AS netCents
-           FROM bank_summaries ORDER BY month ASC, business ASC`,
-        )
-        .all() as BankSummary[];
-    },
-    close() {
-      db.close();
-    },
-  };
+  const close = async () => {
+    // No-op for Supabase
+  }
+
+  return { upsert, all, close }
 }
